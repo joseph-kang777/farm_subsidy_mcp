@@ -1,0 +1,38 @@
+name: refresh-data
+
+# 정부 소스 데이터를 주기적으로 수집해 data/snapshot.json으로 커밋한다.
+# (카카오클라우드에서는 정부 사이트가 IP를 차단하므로 서버는 이 스냅샷을 읽는다)
+on:
+  schedule:
+    - cron: "0 21,3,9 * * *" # KST 06시/12시/18시
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Build snapshot
+        env:
+          GOV24_API_KEY: ${{ secrets.GOV24_API_KEY }}
+          BIZINFO_API_KEY: ${{ secrets.BIZINFO_API_KEY }}
+        run: npx tsx src/scripts/build-snapshot.ts
+      - name: Commit & push if changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/snapshot.json
+          if git diff --cached --quiet; then
+            echo "변경 없음"
+          else
+            git commit -m "chore: 데이터 스냅샷 갱신 [skip ci]"
+            git push
+          fi

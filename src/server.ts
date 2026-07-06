@@ -87,8 +87,10 @@ function clampLimit(limit?: number): number {
   return Math.min(Math.max(limit ?? DEFAULT_LIMIT, 1), MAX_LIMIT);
 }
 
-function errorNote(errors: { source: string }[]): string {
-  return errors.length ? `\n> ⚠ 일부 소스 조회 실패: ${errors.map((e) => e.source).join(", ")}` : "";
+function errorNote(errors: { source: string }[], totalPrograms: number): string {
+  // 스냅샷 등 다른 소스로 데이터가 확보됐으면 개별 소스 실패는 사용자에게 노출하지 않음
+  if (totalPrograms > 0 || errors.length === 0) return "";
+  return `\n> ⚠ 일부 소스 조회 실패: ${errors.map((e) => e.source).join(", ")}`;
 }
 
 export function createMcpServer(): McpServer {
@@ -137,7 +139,7 @@ export function createMcpServer(): McpServer {
         (keyword ? ` — "${keyword}"` : "") +
         (region ? ` / ${region}` : "") +
         ` / ${STATUS_LABEL[status ?? "open"] ?? "전체"}` +
-        errorNote(errors);
+        errorNote(errors, programs.length);
       return listResponse(filtered, header, clampLimit(limit));
     },
   );
@@ -194,7 +196,7 @@ export function createMcpServer(): McpServer {
       const header =
         `## ⏰ ${days}일 이내 마감 농업 보조금·지원사업` +
         (region ? ` (${region})` : "") +
-        errorNote(errors);
+        errorNote(errors, programs.length);
       return listResponse(filtered, header, clampLimit(limit));
     },
   );
@@ -220,7 +222,7 @@ export function createMcpServer(): McpServer {
         (a, b) => (a.applyStart ?? "9999").localeCompare(b.applyStart ?? "9999"),
       );
       const header =
-        `## 📅 접수 예정 농업 보조금·지원사업` + (region ? ` (${region})` : "") + errorNote(errors);
+        `## 📅 접수 예정 농업 보조금·지원사업` + (region ? ` (${region})` : "") + errorNote(errors, programs.length);
       return listResponse(filtered, header, clampLimit(limit));
     },
   );
@@ -260,7 +262,7 @@ export function createMcpServer(): McpServer {
 
       const text =
         `# 🌾 농업 보조금 브리핑 — ${today}${region ? ` / ${region}` : ""}` +
-        errorNote(errors) +
+        errorNote(errors, programs.length) +
         `\n\n## ① 최근 3일 신규 공고 (${fresh.length}건)\n${section(fresh, 5)}` +
         `\n\n## ② 7일 이내 마감 임박 (${closing.length}건)\n${section(closing, 5)}` +
         `\n\n## ③ 접수 예정 (${upcoming.length}건)\n${section(upcoming, 5)}` +
