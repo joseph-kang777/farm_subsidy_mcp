@@ -21,6 +21,7 @@ export function registerSource(source: SubsidySource): void {
 let lastPrograms: SubsidyProgram[] = [];
 let lastErrors: { source: string; message: string }[] = [];
 let lastFetchedAt = 0;
+let lastSourceCounts: Record<string, number> = {};
 let refreshing: Promise<void> | null = null;
 
 const STALE_MS = 15 * 60 * 1000;
@@ -28,16 +29,24 @@ const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
 async function refresh(): Promise<void> {
   const errors: { source: string; message: string }[] = [];
+  const counts: Record<string, number> = {};
   const results = await Promise.allSettled(sources.map((s) => s.fetchPrograms()));
   const programs: SubsidyProgram[] = [];
   results.forEach((r, i) => {
     if (r.status === "fulfilled") {
       programs.push(...r.value);
+      counts[sources[i].id] = r.value.length;
     } else {
-      errors.push({ source: sources[i].name, message: String(r.reason?.message ?? r.reason) });
+      const cause = r.reason?.cause ? ` (cause: ${String(r.reason.cause)})` : "";
+      errors.push({
+        source: sources[i].name,
+        message: `${String(r.reason?.message ?? r.reason)}${cause}`,
+      });
+      counts[sources[i].id] = -1;
       console.error(`[aggregate] source ${sources[i].id} failed:`, r.reason);
     }
   });
+  lastSourceCounts = counts;
 
   const deduped = dedupePrograms(programs);
   // 상태 우선 정렬: 접수중(마감 임박순) → 접수예정(시작 임박순) → 상시/미정(최신 게시순) → 마감(최근 마감순)
@@ -103,6 +112,20 @@ export async function getAllPrograms(): Promise<{
     void triggerRefresh();
   }
   return { programs: lastPrograms, errors: lastErrors, fetchedAt: lastFetchedAt };
+}
+
+/** 운영 진단용 상태 (healthz 노출) */
+export function getDiagnostics() {
+  return {
+    fetchedAt: lastFetchedAt ? new Date(lastFetchedAt).toISOString() : null,
+    totalPrograms: lastPrograms.length,
+    sourceCounts: lastSourceCounts, // -1 = 조회 실패
+    errors: lastErrors,
+    env: {
+      GOV24_API_KEY: process.env.GOV24_API_KEY ? "set" : "missing",
+      BIZINFO_API_KEY: process.env.BIZINFO_API_KEY ? "set" : "missing",
+    },
+  };
 }
 
 /** ID로 단건 조회 */

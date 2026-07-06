@@ -4,16 +4,21 @@ loadDotEnv();
 import express from "express";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { createMcpServer } from "./server.js";
-import { startBackgroundRefresh } from "./aggregate.js";
+import { getDiagnostics, startBackgroundRefresh } from "./aggregate.js";
 
 const PORT = Number(process.env.PORT ?? 8080);
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
 
-// 헬스체크 (로드밸런서/심사용)
+// 헬스체크 + 수집 상태 진단 (로드밸런서/운영 확인용)
 app.get("/healthz", (_req, res) => {
-  res.json({ ok: true, service: "farm-subsidy-mcp", time: new Date().toISOString() });
+  res.json({
+    ok: true,
+    service: "farm-subsidy-mcp",
+    time: new Date().toISOString(),
+    aggregate: getDiagnostics(),
+  });
 });
 
 // Stateless Streamable HTTP: 요청마다 서버/트랜스포트 인스턴스 생성
