@@ -91,7 +91,16 @@ function triggerRefresh(): Promise<void> {
 
 /** 서버 기동 시 1회 수집 + 주기적 백그라운드 갱신 시작 */
 export function startBackgroundRefresh(): Promise<void> {
-  const first = triggerRefresh();
+  const first = (async () => {
+    await triggerRefresh();
+    // 컨테이너 부팅 직후에는 네트워크가 준비되지 않아 전 소스가 실패할 수 있음 → 짧은 간격 재시도
+    for (const delayMs of [10_000, 20_000, 40_000, 60_000]) {
+      if (lastPrograms.length > 0) break;
+      await new Promise((r) => setTimeout(r, delayMs));
+      console.log("[aggregate] 부팅 직후 수집 실패 — 재시도");
+      await triggerRefresh();
+    }
+  })();
   const timer = setInterval(triggerRefresh, REFRESH_INTERVAL_MS);
   timer.unref();
   return first;
