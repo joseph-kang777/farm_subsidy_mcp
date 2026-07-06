@@ -21,6 +21,33 @@ app.get("/healthz", (_req, res) => {
   });
 });
 
+// 배포 환경에서 어떤 외부 호스트에 접근 가능한지 진단 (/netprobe)
+app.get("/netprobe", async (_req, res) => {
+  const targets = [
+    "https://api.odcloud.kr/api/gov24/v3/serviceList?page=1&perPage=1",
+    "https://www.nongupez.go.kr/",
+    "https://www.mafra.go.kr/",
+    "https://www.bizinfo.go.kr/",
+    "https://raw.githubusercontent.com/joseph-kang777/farm_subsidy_mcp/main/data/snapshot.json",
+  ];
+  const results: Record<string, string> = {};
+  await Promise.all(
+    targets.map(async (url) => {
+      const host = new URL(url).host;
+      try {
+        const controller = new AbortController();
+        const timer = setTimeout(() => controller.abort(), 8000);
+        const r = await fetch(url, { signal: controller.signal, method: "GET" });
+        clearTimeout(timer);
+        results[host] = `HTTP ${r.status}`;
+      } catch (err: any) {
+        results[host] = `FAIL: ${String(err?.cause ?? err?.message ?? err)}`.slice(0, 120);
+      }
+    }),
+  );
+  res.json(results);
+});
+
 // Stateless Streamable HTTP: 요청마다 서버/트랜스포트 인스턴스 생성
 app.post("/mcp", async (req, res) => {
   try {
