@@ -27,6 +27,25 @@ let refreshing: Promise<void> | null = null;
 const STALE_MS = 15 * 60 * 1000;
 const REFRESH_INTERVAL_MS = 10 * 60 * 1000;
 
+/** 상태 우선 정렬: 접수중(마감 임박순) → 접수예정(시작 임박순) → 상시/미정(최신 게시순) → 마감(최근 마감순) */
+function sortPrograms(list: SubsidyProgram[]): void {
+  const STATUS_RANK: Record<string, number> = { open: 0, upcoming: 1, unknown: 2, closed: 3 };
+  list.sort((a, b) => {
+    const rank = STATUS_RANK[a.status] - STATUS_RANK[b.status];
+    if (rank !== 0) return rank;
+    switch (a.status) {
+      case "open":
+        return (a.applyEnd ?? "9999-99-99").localeCompare(b.applyEnd ?? "9999-99-99");
+      case "upcoming":
+        return (a.applyStart ?? "9999-99-99").localeCompare(b.applyStart ?? "9999-99-99");
+      case "closed":
+        return (b.applyEnd ?? "0000-00-00").localeCompare(a.applyEnd ?? "0000-00-00");
+      default:
+        return (b.postedAt ?? "0000-00-00").localeCompare(a.postedAt ?? "0000-00-00");
+    }
+  });
+}
+
 async function refresh(): Promise<void> {
   const errors: { source: string; message: string }[] = [];
   const counts: Record<string, number> = {};
@@ -49,22 +68,7 @@ async function refresh(): Promise<void> {
   lastSourceCounts = counts;
 
   const deduped = dedupePrograms(programs);
-  // 상태 우선 정렬: 접수중(마감 임박순) → 접수예정(시작 임박순) → 상시/미정(최신 게시순) → 마감(최근 마감순)
-  const STATUS_RANK: Record<string, number> = { open: 0, upcoming: 1, unknown: 2, closed: 3 };
-  deduped.sort((a, b) => {
-    const rank = STATUS_RANK[a.status] - STATUS_RANK[b.status];
-    if (rank !== 0) return rank;
-    switch (a.status) {
-      case "open":
-        return (a.applyEnd ?? "9999-99-99").localeCompare(b.applyEnd ?? "9999-99-99");
-      case "upcoming":
-        return (a.applyStart ?? "9999-99-99").localeCompare(b.applyStart ?? "9999-99-99");
-      case "closed":
-        return (b.applyEnd ?? "0000-00-00").localeCompare(a.applyEnd ?? "0000-00-00");
-      default:
-        return (b.postedAt ?? "0000-00-00").localeCompare(a.postedAt ?? "0000-00-00");
-    }
-  });
+  sortPrograms(deduped);
 
   // 전 소스가 실패한 경우 기존 데이터를 유지 (서비스 연속성)
   if (deduped.length > 0 || lastPrograms.length === 0) {
@@ -107,16 +111,47 @@ export function startBackgroundRefresh(): Promise<void> {
 }
 
 /**
- * 캐시된 공고 목록 반환. 캐시가 비어 있으면(콜드 스타트 직후) 수집 완료까지 대기하고,
- * 오래된 캐시는 그대로 반환하면서 백그라운드 갱신만 트리거한다(stale-while-revalidate).
+ * 캐시가 비어 있을 때 스냅샷 소스만 빠르게 로드하는 폴백 경로.
+ * KC처럼 유휴 시 CPU가 멈추는(타이머가 돌지 않는) 서버리스 환경에서도
+ * 첫 요청이 1~2초 안에 데이터를 확보할 수 있게 한다.
+ */
+let snapshotLoading: Promise<void> | null = null;
+
+async function loadSnapshotFallback(): Promise<void> {
+  if (snapshotLoading) return snapshotLoading;
+  snapshotLoading = (async () => {
+    const snap = sources.find((s) => s.id === "snapshot");
+    if (!snap) return;
+    try {
+      const programs = await snap.fetchPrograms();
+      if (programs.length > 0 && lastPrograms.length === 0) {
+        lastPrograms = dedupePrograms(programs);
+        sortPrograms(lastPrograms);
+        lastFetchedAt = Date.now();
+        lastSourceCounts = { snapshot: programs.length };
+        console.log(`[aggregate] 스냅샷 폴백 로드: ${lastPrograms.length}건`);
+      }
+    } catch (err) {
+      console.error("[aggregate] 스냅샷 폴백 실패:", err);
+    }
+  })().finally(() => {
+    snapshotLoading = null;
+  });
+  return snapshotLoading;
+}
+
+/**
+ * 캐시된 공고 목록 반환. 캐시가 비어 있으면(콜드 스타트 직후) 스냅샷을 우선 로드해 즉시 응답하고,
+ * 전체 수집은 백그라운드로 진행한다. 오래된 캐시는 그대로 반환하면서 갱신만 트리거한다.
  */
 export async function getAllPrograms(): Promise<{
   programs: SubsidyProgram[];
   errors: { source: string; message: string }[];
   fetchedAt: number;
 }> {
-  if (lastPrograms.length === 0 && lastFetchedAt === 0) {
-    await triggerRefresh();
+  if (lastPrograms.length === 0) {
+    await loadSnapshotFallback(); // 빠른 경로 (GitHub raw 1회 호출)
+    void triggerRefresh(); // 전체 소스 수집은 백그라운드
   } else if (Date.now() - lastFetchedAt > STALE_MS) {
     void triggerRefresh();
   }
